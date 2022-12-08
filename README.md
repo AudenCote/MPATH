@@ -4,9 +4,9 @@ This is an R library for analysis of differential expression of genes in human m
 ### Install as an R library
 The code can be installed using devtools:
 
-install.packages("devtools") 
-library(devtools) 
-install_github("AudenCote/MPATH") 
+install.packages("devtools")\
+library(devtools)\
+install_github("AudenCote/MPATH")\
 
 ## Using the pipeline
 
@@ -56,12 +56,12 @@ mpath$Pathways(method = "MitoCarta", top_path_n = 3)
 ### Example
 A whole pipeline run looks relatively simple:
 
-require(MPATH)
+require(MPATH)\
 
-mpath <- MPATH_Pipeline(expression_file = 'ExampleExpressionData.tsv')
-mpath$Volcano()
-mpath$GeneRegulation()
-mpath$PCA()
+mpath <- MPATH_Pipeline(expression_file = 'ExampleExpressionData.tsv')\
+mpath$Volcano()\
+mpath$GeneRegulation()\
+mpath$PCA()\
 mpath$Pathways()
 
 
