@@ -4,9 +4,9 @@ This is an R library for analysis of differential expression of genes in human m
 ### Install as an R library
 The code can be installed using devtools:
 
-install.packages("devtools")
-library(devtools)
-install_github("AudenCote/MPATH")
+install.packages("devtools") 
+library(devtools) 
+install_github("AudenCote/MPATH") 
 
 ## Using the pipeline
 
