@@ -1,5 +1,5 @@
 # MPATH
-This is an R library for analysis of differential expression of genes in human mitochondria-related pathways, developed by the Woods lab at Northeastern University.
+This is an R library for analysis of differential expression of genes in human mitochondria-related pathways.
 
 ### Install as an R library
 The code can be installed using devtools:
