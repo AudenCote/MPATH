@@ -43,10 +43,23 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
                          ){
     callSuper(..., mitocarta_data = mitocarta_data, pathways = pathways)
 
-    expression_data <<- data.frame(read_tsv(.self$expression_file)) %>%
-      filter(Gene %in% read_sheet(.self$mitocarta_data$path, .self$mitocarta_data$gene.sheet)[[.self$mitocarta_data$gene.col]])
+    expression_data <<- data.frame(read_tsv(.self$expression_file))
 
-    expression_data <<- na.omit(.self$expression_data) %>%
+    repsdb <- na.omit(.self$expression_data) %>% #
+      group_by(Sample) %>%
+      summarise(max_reps = max(Replicate))
+
+    max_rep_genes <- .self$expression_data %>%
+      group_by(Gene, Sample) %>%
+      summarise(reps = n()) %>%
+      merge(repsdb, by = 'Sample') %>%
+      group_by(Gene) %>%
+      summarise(any_less = sum(ifelse(reps < max_reps, 1, 0))) %>%
+      filter(any_less == 0)
+
+    expression_data <<- .self$expression_data %>%
+      filter(Gene %in% max_rep_genes$Gene) %>%
+      filter(Gene %in% read_sheet(.self$mitocarta_data$path, .self$mitocarta_data$gene.sheet)[[.self$mitocarta_data$gene.col]]) %>%
       merge(.self$ensembl_query(.self$expression_data$Gene), by = 'Gene')
   },
 
@@ -74,13 +87,16 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
     )
 
     r <- POST(url, body = body, encode = "form", verbose())
-    fromJSON( content(r, "text"), flatten=TRUE)$results$result %>%
+    data.frame(fromJSON( content(r, "text"), flatten=TRUE)$results$result) %>%
       select(fold_enrichment | term.label) %>%
       rename(Pathway = term.label) %>%
       rename(Fold.Enrichment = fold_enrichment)
   },
 
-  Volcano = function(benchmark_sample = '1', compared_samples = NULL){
+  Volcano = function(benchmark_sample = NULL, compared_samples = NULL){
+    if(is.null(benchmark_sample)){
+      benchmark_sample <- unique(.self$expression_data$Sample)[1]
+    }
     d1 <- filter(.self$expression_data, Sample == benchmark_sample) %>% mutate(Exp1 = Exp) %>% select(!Sample & !Exp)
     if(is.null(compared_samples)){
       compared_samples <- unique(.self$expression_data$Sample)[unique(.self$expression_data$Sample) != benchmark_sample]
@@ -97,9 +113,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
 
       log2fc_pval_dataframe <<- rbind(.self$log2fc_pval_dataframe, compdf)
 
-      vplot = ggplot(data = compdf, aes(x = Log2FC, y = -log10(P))) + geom_point()
-      samp_name = paste('sample_', samp, sep = '')
-      volcano_plots <<- append(.self$volcano_plots, list(samp_name = vplot))
+      .self$volcano_plots[[toString(samp)]] = ggplot(data = compdf, aes(x = Log2FC, y = -log10(P))) + geom_point()
     }
   },
 
@@ -113,8 +127,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       summarise(Up = sum(Direction), Down = -(n() - sum(Direction))) %>%
       pivot_longer(!Sample, names_to = 'Direction', values_to = 'Sum')
 
-    #SET THE Y AXIS LIMITS IN A MORE INTELLIGENT WAY
-    regulation_barplot <<- list('plot' = ggplot(dir_counts, aes(Sample, Sum, fill = Direction)) +
+    regulation_barplot <<- list('plot' = ggplot(dir_counts, aes(as.factor(Sample), Sum, fill = Direction)) +
       geom_bar(stat = 'identity', position = 'identity') +
       xlab("Sample")+ylab("Number of genes") +
       scale_fill_discrete(name = "",labels = c("Upregulated","Downregulated")) +
@@ -128,7 +141,6 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       select(!Gene & !Culture & !Replicate) %>%
       pivot_wider(values_from = Exp, names_from = Symbol) %>%
       column_to_rownames("Sample") %>%
-      na.omit() %>%
       as.matrix()
   },
 
@@ -153,13 +165,6 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
     pc_loadings<-sample_pca$rotation %>%
       as_tibble(rownames = "Gene")
 
-    top_loadings <- pc_loadings %>%
-      select(Gene, PC1, PC2) %>%
-      pivot_longer(matches("PC"), names_to = "PC", values_to = "loading") %>%
-      group_by(PC) %>%
-      arrange(desc(abs(loading))) %>%
-      slice(1:10)
-
     loadings_plot <- autoplot(ggplot(data = pc_loadings) +
       geom_segment(aes(x = 0, y = 0, xend = PC1, yend = PC2),
                    arrow = arrow(length = unit(0.1, "in")),
@@ -173,17 +178,16 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       'pca_plot' = pca_plot,
       'elbow_plot' = elbow_plot,
       'loadings' = pc_loadings,
-      'top_loadings' = top_loadings,
       'loadings_plot' = loadings_plot
     )
   },
 
-  Pathways = function(method = NULL, top_gene_n = 5){
+  Pathways = function(method = 'both', top_path_n = 5){
 
     .self$pathways[['plots']] = list()
 
     path_barplot_wrapper <- function(pathdb, col){
-      pathdb <- pathdb[order(pathdb[,col], decreasing = TRUE),][1:top_gene_n,]
+      pathdb <- pathdb[order(pathdb[,col], decreasing = TRUE),][1:top_path_n,]
 
       length(pull(pathdb, col))
 
@@ -206,7 +210,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       rownames_to_column('Sample') %>%
       pivot_longer(!Sample, names_to = 'Symbol', values_to = 'Exp')
 
-    if(is.null(method) | method == 'MitoCarta'){
+    if(method == 'both' | method == 'MitoCarta'){
       freq_temp <- read_sheet(.self$mitocarta_data$path, .self$mitocarta_data$pathway.sheet) %>%
         select(MitoPathway | Genes) %>%
         separate_rows(Genes, sep = ',') %>%
@@ -230,7 +234,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
         summarise(Sig.Up = sum(Sig.Up), Sig.Down = sum(Sig.Down))
 
       .self$pathways[['plots']][['heatmaps']] = list()
-      top_paths <- append(freq2plot[order(freq2plot[,'Sig.Up'], decreasing = TRUE),][1:top_gene_n,]$Pathway, freq2plot[order(freq2plot[,'Sig.Up'], decreasing = TRUE),][1:top_gene_n,]$Pathway)
+      top_paths <- append(freq2plot[order(freq2plot[,'Sig.Up'], decreasing = TRUE),][1:top_path_n,]$Pathway, freq2plot[order(freq2plot[,'Sig.Down'], decreasing = TRUE),][1:top_path_n,]$Pathway)
       top_pathway_genes_l2fcp <<- freq_temp %>%
         filter(Genes %in% goi_long$Symbol & MitoPathway %in% top_paths)
 
@@ -243,12 +247,12 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
           labs(x = 'Sample', y = 'Gene', fill = 'Log(2FC)')
       }
 
+    }
 
-
-    }else if(is.null(method) | method == 'Panther'){
+    if(method == 'both' | method == 'Panther'){
       goi_logp <- .self$log2fc_pval_dataframe %>%
         merge(ensembl_symbol_conversion, by = 'Symbol') %>%
-        filter(Symbol %in% goi_long$symbol)
+        filter(Symbol %in% goi_long$Symbol)
 
       .self$pathways[['panther_frequencies']] = .self$panther_query(filter(goi_logp, Log2FC > 0)$Gene) %>%
         mutate(Dir = 'Sig.Up') %>%
@@ -258,10 +262,8 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
         ) %>%
         pivot_wider(names_from = 'Dir', values_from = 'Fold.Enrichment')
 
-      .self$pathways[['plots']][['panther.up']] = pathplot_wrapper(.self$pathways[['pather_frequencies']], 'Sig.Up')
-      .self$pathways[['plots']][['panther.down']] = pathplot_wrapper(.self$pathways[['panther_frequencies']], 'Sig.Down')
-    }else{
-      logger('Invalid pathway enrichment detection method', 'error')
+      .self$pathways[['plots']][['panther.up']] = path_barplot_wrapper(.self$pathways[['panther_frequencies']], 'Sig.Up')
+      .self$pathways[['plots']][['panther.down']] = path_barplot_wrapper(.self$pathways[['panther_frequencies']], 'Sig.Down')
     }
   }
   )
