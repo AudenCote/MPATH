@@ -6,7 +6,7 @@ The code can be installed using devtools:
 
 install.packages("devtools")\
 library(devtools)\
-install_github("AudenCote/MPATH")\
+install_github("AudenCote/MPATH")
 
 ## Using the pipeline
 
