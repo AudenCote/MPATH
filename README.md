@@ -56,7 +56,7 @@ mpath$Pathways(method = "MitoCarta", top_path_n = 3)
 ### Example
 A whole pipeline run looks relatively simple:
 
-require(MPATH)\
+require(MPATH)
 
 mpath <- MPATH_Pipeline(expression_file = 'ExampleExpressionData.tsv')\
 mpath$Volcano()\
