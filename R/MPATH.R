@@ -19,6 +19,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
 
   fields = list(
     expression_file = 'character',
+    benchmark = 'character',
     expression_data = 'data.frame',
     mitocarta_data = 'list',
     log2fc_pval_dataframe = 'data.frame',
@@ -27,7 +28,6 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
     goi_expression = 'matrix',
     pca = 'list',
     pathways = 'list',
-    test_hmdb = 'matrix',
     top_pathway_genes_l2fcp = 'data.frame'
   ),
 
@@ -41,16 +41,14 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
                            'pathway.sheet' = 'C MitoPathways'
                           ),
                           pathways = list(
-                            'mitocarta_frequencies' = data.frame(),
-                            'mitocarta_fisher_tests' = data.frame(),
-                            'panther_frequencies' = data.frame()
+                            'MitoCarta frequencies' = data.frame(),
+                            'Mitocarta Fisher results' = data.frame(),
+                            'Panther frequencies' = data.frame()
                           )
                          ){
     callSuper(..., mitocarta_data = mitocarta_data, pathways = pathways)
 
-    expression_data <<- data.frame(read_tsv(.self$expression_file)) %>%
-     sample_n(1000)
-
+    expression_data <<- data.frame(read_tsv(.self$expression_file))
     .self$expression_data[.self$expression_data == 0] <- NA
 
     expression_data <<- .self$expression_data %>%
@@ -98,6 +96,8 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       benchmark_sample <- unique(.self$expression_data$Sample)[1]
     }
 
+    benchmark <<- benchmark_sample
+
     d1 <- filter(.self$expression_data, Sample == benchmark_sample) %>% mutate(Exp1 = Exp) %>% select(!Sample & !Exp)
     compared_samples <- unique(.self$expression_data$Sample)[unique(.self$expression_data$Sample) != benchmark_sample]
 
@@ -114,8 +114,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
 
       .self$volcano_plots[[toString(samp)]] = ggplot(data = compdf, aes(x = Log2FC, y = -log10(P))) +
         geom_point() +
-        theme_classic() +
-        labs(title = samp)
+        theme_classic()
     }
 
     log2fc_pval_dataframe <<- na.omit(log2fc_pval_dataframe)
@@ -130,6 +129,8 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       group_by(Sample) %>%
       summarise(Up = sum(Direction), Down = -(n() - sum(Direction))) %>%
       pivot_longer(!Sample, names_to = 'Direction', values_to = 'Sum')
+
+    dir_counts$Sample = factor(dir_counts$Sample, levels = unique(.self$expression_data$Sample)[unique(.self$expression_data$Sample) != .self$benchmark])
 
     regulation_barplot <<- list('plot' = ggplot(dir_counts, aes(as.factor(Sample), Sum, fill = Direction)) +
       geom_bar(stat = 'identity', position = 'identity') +
@@ -148,12 +149,12 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       as.matrix()
   },
 
-  PCA = function(clusters){
+  PCA = function(){
 
-    elbow_plot <- fviz_nbclust(.self$goi_expression, kmeans, method = "wss") +
-        labs(subtitle = "Elbow method")
+    sil_plot <- fviz_nbclust(.self$goi_expression, kmeans, method = "silhouette")
 
-    #ADD SILHOUETTE FUNCTION TO CALCULATE # CLUSTERS
+    clusters <- sil_plot$data$clusters[sil_plot$data$y == max(sil_plot$data$y)]
+
     pca_plot <- autoplot(kmeans(.self$goi_expression, clusters),
               data = .self$goi_expression,
               label = TRUE,
@@ -180,7 +181,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
 
     pca <<- list(
         'pca_plot' = pca_plot,
-       'elbow_plot' = elbow_plot,
+       'sil_plot' = sil_plot,
        'loadings' = pc_loadings,
        'loadings_plot' = loadings_plot
     )
@@ -233,14 +234,14 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       .self$pathways[['plots']][['mitocarta.up']] = path_barplot_wrapper(freq2plot, 'Sig.Up')
       .self$pathways[['plots']][['mitocarta.down']] = path_barplot_wrapper(freq2plot, 'Sig.Down')
 
-      .self$pathways[['mitocarta_frequencies']] = freq_temp %>%
+      .self$pathways[['MitoCarta frequencies']] = freq_temp %>%
         group_by(MitoPathway, Sample) %>%
         summarise(Sig.Up = sum(Sig.Up), Sig.Down = sum(Sig.Down))
 
       n_total_up = sum(freq_temp$Sig.Up)
       n_total_down = sum(freq_temp$Sig.Down)
 
-      .self$pathways[['mitocarta_fisher_tests']] = freq_temp %>%
+      .self$pathways[['Mitocarta Fisher results']] = freq_temp %>%
         group_by(MitoPathway) %>%
         summarise(P = fisher.test(
           matrix(
@@ -260,7 +261,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
         mutate(Log2FC = as.numeric(Log2FC)) %>%
         pivot_wider(names_from = Sample, values_from = Log2FC)
 
-      for(path in unique(top_pathway_genes_l2fcp$MitoPathway)){
+      for(path in unique(hm_db$MitoPathway)){
         path_hmdb <- hm_db %>%
           filter(MitoPathway == path) %>%
           select(!MitoPathway) %>%
@@ -271,7 +272,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
 
         path_hmdb <- path_hmdb[, unique(.self$log2fc_pval_dataframe$Sample)]
 
-        .self$pathways[['plots']][['heatmaps']][[path]] = heatmaply(path_hmdb, Colv = NA, col = colorRampPalette(brewer.pal(3, "Blues"))(25))
+        .self$pathways[['plots']][['heatmaps']][[path]] = heatmaply(path_hmdb, Colv = NA, col = colorRampPalette(brewer.pal(3, "Blues"))(25), main = path)
       }
 
     }
@@ -281,7 +282,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
         merge(ensembl_symbol_conversion, by = 'Symbol') %>%
         filter(Symbol %in% goi_long$Symbol)
 
-      .self$pathways[['panther_frequencies']] = .self$panther_query(filter(goi_logp, Log2FC > 0)$Gene) %>%
+      .self$pathways[['Panther frequencies']] = .self$panther_query(filter(goi_logp, Log2FC > 0)$Gene) %>%
         mutate(Dir = 'Sig.Up') %>%
         rbind(
           .self$panther_query(filter(goi_logp, Log2FC < 0)$Gene) %>%
@@ -289,9 +290,9 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
         ) %>%
         pivot_wider(names_from = 'Dir', values_from = 'Fold.Enrichment')
 
-      .self$pathways[['plots']][['panther.up']] = path_barplot_wrapper(.self$pathways[['panther_frequencies']], 'Sig.Up')
-      .self$pathways[['plots']][['panther.down']] = path_barplot_wrapper(.self$pathways[['panther_frequencies']], 'Sig.Down')
+      .self$pathways[['plots']][['panther.up']] = path_barplot_wrapper(.self$pathways[['Panther frequencies']], 'Sig.Up')
+      .self$pathways[['plots']][['panther.down']] = path_barplot_wrapper(.self$pathways[['Panther frequencies']], 'Sig.Down')
     }
-  }
+    }
   )
 )
