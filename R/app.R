@@ -70,6 +70,11 @@ ui <- dashboardPage(
                     textInput('log2fc_threshold', 'Log(2FC) threshold', value = '1.5'),
                     textInput('pval_threshold', 'P-value threshold', value = '0.01'),
 
+                    fileInput("gene_list_file", "Optional: input file with a list of genes (.csv or .tsv)",
+                              multiple = F,
+                              accept = c(".tsv",
+                                         ".csv")),
+
                     div(style="float: left; position: relative; left: 40%; margin: 0px",actionButton("run_pipeline","Run pipeline"))
                   )
                 ) %>% shinyjs::hidden()
@@ -112,7 +117,7 @@ ui <- dashboardPage(
 
       tabItem(tabName = "volcano_plots",
               uiOutput('volcano_plot_selection'),
-              plotOutput("volcano_plot")
+              plotlyOutput("volcano_plot")
       ),
 
       tabItem(tabName = "regulation_barplot",
@@ -122,6 +127,7 @@ ui <- dashboardPage(
 
       tabItem(tabName = "pca_plots",
               plotOutput('sil_plot'),
+              uiOutput('pca_slider'),
               plotOutput('pca_plot'),
               plotOutput('loadings_plot')
       ),
@@ -144,7 +150,6 @@ server <- function(input, output, session) {
 
   observeEvent(input$load_data, {
     inst(MPATH_Pipeline(expression_file = input$expression_file$datapath))
-
     shinyjs::toggle("data_loaded")
   })
 
@@ -153,9 +158,10 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$run_pipeline, {
-    inst()$Volcano(benchmark_sample = input$benchmark_sample)
+    inst()$filter_genes(input$gene_list_file$datapath)
+    inst()$Volcano(benchmark_sample = input$benchmark_sample, as.numeric(input$log2fc_threshold), as.numeric(input$pval_threshold))
     inst()$GeneRegulation(as.numeric(input$log2fc_threshold), as.numeric(input$pval_threshold))
-    inst()$PCA()
+    inst()$silhouette()
     inst()$Pathways()
 
     shinyjs::toggle("pipeline_run")
@@ -166,8 +172,13 @@ server <- function(input, output, session) {
                 choices = as.character(unique(inst()$expression_data$Sample)[unique(inst()$expression_data$Sample) != input$benchmark_sample]))
   })
 
-  output$volcano_plot <- renderPlot({
-    inst()$volcano_plots[input$volcano_plot_sample]
+  output$volcano_plot <- renderPlotly({
+    inst()$volcano_plots[[input$volcano_plot_sample]]
+  })
+
+  output$pca_slider <- renderUI({
+    sliderInput("slider_clusters", label = h3("Change number of clusters"), min = 0,
+              max = 10, value = as.integer(inst()$silhouette_clusters))
   })
 
   output$heatmap_pathway_selection <- renderUI({
@@ -192,9 +203,20 @@ server <- function(input, output, session) {
   })
 
   output$regulation_barplot <- renderPlot(inst()$regulation_barplot$plot)
-  output$pca_plot <- renderPlot(inst()$pca$pca_plot)
+
+  output$pca_plot <- renderPlot({
+    inst()$PCA(as.integer(input$slider_clusters)) #as.integer(input$slider_clusters)
+    inst()$pca$pca_plot
+    }
+  )
+
+  output$loadings_plot <- renderPlot({
+    inst()$PCA(as.integer(input$slider_clusters)) #as.integer(input$slider_clusters)
+    inst()$pca$loadings_plot
+  }
+  )
+
   output$sil_plot <- renderPlot(inst()$pca$sil_plot)
-  output$loadings_plot <- renderPlot(inst()$pca$loadings_plot)
 
   output$download_expression_data <- downloadHandler(
     filename = 'MPATH_ExpressionData.csv',

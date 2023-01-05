@@ -26,8 +26,10 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
     volcano_plots = 'list',
     regulation_barplot = 'list',
     goi_expression = 'matrix',
+    silhouette_clusters = 'integer',
     pca = 'list',
     pathways = 'list',
+    pathways2use = 'data.frame',
     top_pathway_genes_l2fcp = 'data.frame'
   ),
 
@@ -48,7 +50,8 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
                          ){
     callSuper(..., mitocarta_data = mitocarta_data, pathways = pathways)
 
-    expression_data <<- data.frame(read_tsv(.self$expression_file))
+    expression_data <<- data.frame(read_tsv(.self$expression_file))# %>%
+      #sample_n(1000)
     .self$expression_data[.self$expression_data == 0] <- NA
 
     expression_data <<- .self$expression_data %>%
@@ -57,6 +60,8 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       separate(Sample, c('Sample', 'Replicate'), sep = '_') %>%
       filter(Gene %in% read_sheet(.self$mitocarta_data$path, .self$mitocarta_data$gene.sheet)[[.self$mitocarta_data$gene.col]]) %>%
       merge(.self$ensembl_query(.self$expression_data$Gene), by = 'Gene')
+
+    pathways2use <<- data.frame(read.csv('../Data/pathways2use.csv'))
   },
 
   ensembl_query = function(ids){
@@ -91,7 +96,15 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       rename(Fold.Enrichment = fold_enrichment)
   },
 
-  Volcano = function(benchmark_sample = NULL){
+  filter_genes = function(gene_list_file){
+    if(!is.null(gene_list_file)){
+      gene_list <- data.frame(read.table(gene_list_file, header = F))
+      expression_data <<- .self$expression_data %>%
+        filter(Symbol %in% gene_list$V1)
+    }
+  },
+
+  Volcano = function(benchmark_sample = NULL, log2fc_threshold = 1.5, pval_threshold = 0.01){
     if(is.null(benchmark_sample)){
       benchmark_sample <- unique(.self$expression_data$Sample)[1]
     }
@@ -108,13 +121,30 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
         group_by(Symbol) %>%
         summarise(P = ifelse(n() > 1, t.test(Exp1, Exp2, paired = F, alternative = 'two.sided', var.equal = T)$p.value, NA),
                    Log2FC = log2(mean(Exp2)/mean(Exp1))) %>%
-        mutate(Sample = samp)
+        mutate(Sample = samp) %>%
+        mutate(sigcol = ifelse(P < pval_threshold & abs(Log2FC) < log2fc_threshold, 'P',
+                               ifelse(P > pval_threshold & abs(Log2FC) > log2fc_threshold, 'FC',
+                                      ifelse(P < pval_threshold & abs(Log2FC) > log2fc_threshold, 'Both', 'Neither'))))
 
       log2fc_pval_dataframe <<- rbind(.self$log2fc_pval_dataframe, compdf)
 
-      .self$volcano_plots[[toString(samp)]] = ggplot(data = compdf, aes(x = Log2FC, y = -log10(P))) +
-        geom_point() +
-        theme_classic()
+      .self$volcano_plots[[toString(samp)]] = ggplotly(
+        ggplot(compdf, aes(x = Log2FC, y = -log10(P), text = Symbol, fill = sigcol)) +
+          geom_point() +
+          scale_fill_manual(values = c('red', 'darkgreen', 'darkgray', 'blue')) +
+          geom_vline(xintercept = -log2fc_threshold, linetype = 'dashed') +
+          geom_vline(xintercept = log2fc_threshold, linetype = 'dashed') +
+          geom_hline(yintercept = -log10(pval_threshold), linetype = 'dashed') +
+          theme_classic() +
+          labs(x = 'Log2(FC)', y = '-Log10(P)') +
+          theme(
+            legend.position = 'none',
+            axis.line = element_line(size = 1.5),
+            axis.ticks = element_line(size = 1.5)
+          )
+        ,
+        tooltip = 'text'
+        )
     }
 
     log2fc_pval_dataframe <<- na.omit(log2fc_pval_dataframe)
@@ -149,11 +179,17 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
       as.matrix()
   },
 
-  PCA = function(){
+  silhouette = function(){
 
     sil_plot <- fviz_nbclust(.self$goi_expression, kmeans, method = "silhouette")
 
-    clusters <- sil_plot$data$clusters[sil_plot$data$y == max(sil_plot$data$y)]
+    silhouette_clusters <<- as.integer(sil_plot$data$clusters[sil_plot$data$y == max(sil_plot$data$y)])
+
+    pca <<- list('sil_plot' = sil_plot)
+
+  },
+
+  PCA = function(clusters){
 
     pca_plot <- autoplot(kmeans(.self$goi_expression, clusters),
               data = .self$goi_expression,
@@ -179,12 +215,10 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
        labs(x = 'PC1', y = 'PC2') +
        theme_classic(), label.repel = T)
 
-    pca <<- list(
-        'pca_plot' = pca_plot,
-       'sil_plot' = sil_plot,
-       'loadings' = pc_loadings,
-       'loadings_plot' = loadings_plot
-    )
+    .self$pca[['pca_plot']] = pca_plot
+    .self$pca[['loadings']] = pc_loadings
+    .self$pca[['loadings_plot']] = loadings_plot
+
   },
 
   Pathways = function(method = 'both', top_path_n = 5){
@@ -218,6 +252,7 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
     if(method == 'both' | method == 'MitoCarta'){
       freq_temp <- read_sheet(.self$mitocarta_data$path, .self$mitocarta_data$pathway.sheet) %>%
         select(MitoPathway | Genes) %>%
+        filter(MitoPathway %in% pathways2use$Pathway) %>%
         separate_rows(Genes, sep = ',') %>%
         na.omit() %>% unique() %>%
         mutate(Genes = gsub(" ", "", Genes)) %>%
@@ -268,11 +303,9 @@ MPATH_Pipeline <- setRefClass('MPATH_Pipeline',
           column_to_rownames(var="Genes") %>%
           as.matrix()
 
-        test_hmdb <<- path_hmdb
-
         path_hmdb <- path_hmdb[, unique(.self$log2fc_pval_dataframe$Sample)]
 
-        .self$pathways[['plots']][['heatmaps']][[path]] = heatmaply(path_hmdb, Colv = NA, col = colorRampPalette(brewer.pal(3, "Blues"))(25), main = path)
+        .self$pathways[['plots']][['heatmaps']][[path]] = heatmaply(path_hmdb, Colv = NA, col = colorRampPalette(c('white', 'darkblue'))(25), main = path)
       }
 
     }
