@@ -7,14 +7,12 @@ setwd('/Users/acl/Desktop/Khrapko/MPATH/Dev/MPATH/R')
 
 source('MPATH.R')
 
-inst <- MPATH_Pipeline(expression_file = '../../WholeCellRNASeq.tsv')
-inst$filter_genes(gene_list_file = '../../SampleGeneList.csv')
-inst$Volcano(benchmark_sample = 'S1')
-#inst$GeneRegulation()
-#inst$silhouette()
-#inst$PCA(3)
-#inst$Pathways(method = 'MitoCarta')
 
-# sample_order = c('S3', 'S5', 'S7', 'S9', 'S12', 'S15', 'S18', 'S20')
-# inst$test_hmdb <- inst$test_hmdb[, sample_order]
-# hm <- heatmaply(inst$test_hmdb, Colv = NA, col = colorRampPalette(brewer.pal(3, "Blues"))(25))
+inst <- MPATH_Pipeline(expression_file = '../../OvarianStage.tsv')
+#inst$filter_genes(gene_list_file = '../../SampleGeneList.csv')
+inst$Volcano(benchmark_sample = 'S1')
+inst$GeneRegulation()
+inst$silhouette()
+inst$PCA(3)
+inst$Pathways(method = 'MitoCarta')
+#inst$pathway_freq_plots('S3', 5)
